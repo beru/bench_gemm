@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <memory.h>
 #include <assert.h>
+#include <intrin.h>
+#include "sgemm_avx256.h"
+
 #include <Windows.h>
 
 // "SAME" zero padding 
@@ -155,7 +158,7 @@ void NHWC_im2col(
   }
 }
 
-void sgemm(
+void sgemm_ver1(
   const float* __restrict a,
   const float* __restrict b,
   float* __restrict c,
@@ -166,13 +169,63 @@ void sgemm(
 {
   for (size_t i=0; i<arows; ++i) {
     for (size_t j=0; j<bcols; ++j) {
-      float sum = 0;
       for (size_t k=0; k<acols; ++k) {
-        sum += a[acols * i + k] * b[bcols * k + j];
+        c[bcols * i + j] += a[acols * i + k] * b[bcols * k + j];
       }
-      c[bcols * i + j] = sum;
     }
   }
+}
+
+void sgemm_ver3(
+  const float* __restrict a,
+  const float* __restrict b,
+  float* __restrict c,
+  size_t acols,
+  size_t arows,
+  size_t bcols
+  )
+{
+  for (size_t i=0; i<arows; ++i) {
+    for (size_t k=0; k<acols; ++k) {
+      for (size_t j=0; j<bcols; ++j) {
+        c[bcols * i + j] += a[acols * i + k] * b[bcols * k + j];
+      }
+    }
+  }
+}
+
+void sgemm_ver4(
+  const float* __restrict a,
+  const float* __restrict b,
+  float* __restrict c,
+  size_t acols,
+  size_t arows,
+  size_t bcols
+  )
+{
+  assert(bcols % 8 == 0);
+  for (size_t i=0; i<arows; ++i) {
+    for (size_t k=0; k<acols; ++k) {
+      __m256 lik = _mm256_broadcast_ss(&a[i*acols+k]);
+      for (size_t j=0; j<bcols; j+=8) {
+        __m256 o = _mm256_loadu_ps(&c[i*acols+j]);
+        __m256 r = _mm256_loadu_ps(&b[k*bcols+j]);
+        o = _mm256_fmadd_ps(lik, r, o);
+        _mm256_storeu_ps(&c[i*acols+j], o);
+      }
+    }
+  }
+}
+
+void sgemm_ver7(
+  const float* __restrict a,
+  const float* __restrict b,
+  float* __restrict c,
+  size_t acols,
+  size_t arows,
+  size_t bcols
+  )
+{
 }
 
 int main(int argc, char* argv[])
@@ -185,13 +238,13 @@ int main(int argc, char* argv[])
   size_t output_channels = 256;
 
   size_t flops = feature_height * feature_width * output_channels * input_channels * kernel_height * kernel_width * 2;
-  printf("feature_width : %d\n", feature_width);
-  printf("feature_height : %d\n", feature_height);
-  printf("kernel_width : %d\n", kernel_width);
-  printf("kernel_height : %d\n", kernel_height);
-  printf("input_channels : %d\n", input_channels);
-  printf("output_channels : %d\n", output_channels);
-  printf("GFLOPS : %.1f\n", flops/(double)(1000*1000*1000));
+  printf("feature_width : %zu\n", feature_width);
+  printf("feature_height : %zu\n", feature_height);
+  printf("kernel_width : %zu\n", kernel_width);
+  printf("kernel_height : %zu\n", kernel_height);
+  printf("input_channels : %zu\n", input_channels);
+  printf("output_channels : %zu\n", output_channels);
+  printf("giga floating point operations : %.1f\n", flops/(double)(1000*1000*1000));
 
   size_t padding_width = kernel_width - 1;
   size_t padding_height = kernel_height - 1;
@@ -202,21 +255,24 @@ int main(int argc, char* argv[])
   size_t weight_bytes = output_channels * kernel_height * kernel_width * input_channels * sizeof(float);
   size_t bias_bytes = output_channels * sizeof(float);
   size_t output_bytes = padded_feature_height * padded_feature_width * output_channels * sizeof(float);
-  float* input = malloc(input_bytes);
-  float* col = malloc(col_bytes);
-  float* weight = malloc(weight_bytes);
-  float* bias = malloc(bias_bytes);
-  float* output = malloc(output_bytes);
+  float* input = (float*)malloc(input_bytes);
+  float* col = (float*)malloc(col_bytes);
+  float* weight = (float*)malloc(weight_bytes);
+  float* bias = (float*)malloc(bias_bytes);
+  float* output = (float*)malloc(output_bytes);
   memset(input, 0, input_bytes);
   memset(col, 0, col_bytes);
   memset(output, 0, output_bytes);
 
   LARGE_INTEGER start, stop, freq;
-  LONGLONG elapsed;
 
   QueryPerformanceFrequency(&freq);
 
-  QueryPerformanceCounter(&start);
+#define MEASURE_START QueryPerformanceCounter(&start)
+#define MEASURE_STOP QueryPerformanceCounter(&stop)
+#define MEASURE_REPORT(name) printf(#name " : %.1f msec\n", 1000 * (double)(stop.QuadPart - start.QuadPart) / freq.QuadPart)
+  
+  MEASURE_START;
   NCHW_convolution_naive_f32(
     padded_feature_width,
     padded_feature_height,
@@ -229,11 +285,10 @@ int main(int argc, char* argv[])
     bias,
     output + padded_feature_width + 1
   );
-  QueryPerformanceCounter(&stop);
-  elapsed = stop.QuadPart - start.QuadPart;
-  printf("NCHW_convolution_naive_f32 elapsed msec: %f\n", 1000 * (double)elapsed / freq.QuadPart);
+  MEASURE_STOP;
+  MEASURE_REPORT(NCHW_convolution_naive_f32);
 
-  QueryPerformanceCounter(&start);
+  MEASURE_START;
   NHWC_convolution_naive_f32(
     padded_feature_width,
     padded_feature_height,
@@ -246,11 +301,10 @@ int main(int argc, char* argv[])
     bias,
     output + padded_feature_width + 1
   );
-  QueryPerformanceCounter(&stop);
-  elapsed = stop.QuadPart - start.QuadPart;
-  printf("NHWC_convolution_naive_f32 elapsed msec: %f\n", 1000 * (double)elapsed / freq.QuadPart);
-
-  QueryPerformanceCounter(&start);
+  MEASURE_STOP;
+  MEASURE_REPORT(NHWC_convolution_naive_f32);
+  
+  MEASURE_START;
   NCHW_im2col(
     feature_width,
     feature_height,
@@ -260,11 +314,10 @@ int main(int argc, char* argv[])
     input,
     col
   );
-  QueryPerformanceCounter(&stop);
-  elapsed = stop.QuadPart - start.QuadPart;
-  printf("NCHW_im2col elapsed msec: %f\n", 1000 * (double)elapsed / freq.QuadPart);
+  MEASURE_STOP;
+  MEASURE_REPORT(NCHW_im2col);
 
-  QueryPerformanceCounter(&start);
+  MEASURE_START;
   NHWC_im2col(
     feature_width,
     feature_height,
@@ -274,16 +327,28 @@ int main(int argc, char* argv[])
     input,
     col
   );
-  QueryPerformanceCounter(&stop);
-  elapsed = stop.QuadPart - start.QuadPart;
-  printf("NHWC_im2col elapsed msec: %f\n", 1000 * (double)elapsed / freq.QuadPart);
+  MEASURE_STOP;
+  MEASURE_REPORT(NHWC_im2col);
 
   size_t acols = (kernel_width * kernel_height * input_channels);
   size_t arows = output_channels;
   size_t bcols = (feature_width * feature_height);
   assert(flops == acols * arows * bcols * 2);
-  QueryPerformanceCounter(&start);
-  sgemm(
+
+  //MEASURE_START
+  //sgemm_ver1(
+  //  weight,
+  //  col,
+  //  output,
+  //  acols,
+  //  arows,
+  //  bcols
+  //);
+  //MEASURE_STOP
+  //MEASURE_REPORT(sgemm_ver1)
+
+  MEASURE_START;
+  sgemm_ver3(
     weight,
     col,
     output,
@@ -291,9 +356,49 @@ int main(int argc, char* argv[])
     arows,
     bcols
   );
-  QueryPerformanceCounter(&stop);
-  elapsed = stop.QuadPart - start.QuadPart;
-  printf("sgemm elapsed msec: %f\n", 1000 * (double)elapsed / freq.QuadPart);
+  MEASURE_STOP;
+  MEASURE_REPORT(sgemm_ver3);
+
+  MEASURE_START;
+  sgemm_ver4(
+    weight,
+    col,
+    output,
+    acols,
+    arows,
+    bcols
+  );
+  MEASURE_STOP;
+  MEASURE_REPORT(sgemm_ver4);
+
+  MEASURE_START;
+  sgemm_ver7(
+    weight,
+    col,
+    output,
+    acols,
+    arows,
+    bcols
+  );
+  MEASURE_STOP;
+  MEASURE_REPORT(sgemm_ver7);
+
+  MEASURE_START;
+  avx256_noncblas_sgemm(
+    arows,  // M
+    bcols,  // N
+    acols,  // K
+    1.0f,   // alpha
+    weight, // A
+    arows,  // lda
+    col,    // B
+    acols,  // ldb
+    1.0f,   // beta
+    output, // C
+    arows   // ldc
+  );
+  MEASURE_STOP;
+  MEASURE_REPORT(avx256_noncblas_sgemm);
 
   free(input);
   free(col);
