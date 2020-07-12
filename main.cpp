@@ -127,13 +127,13 @@ void NCHW_im2col(
   float* col
   )
 {
-  size_t padding_width = (kernel_width - 1) / 2;
-  size_t padding_height = (kernel_height - 1) / 2;
+  //size_t padding_width = (kernel_width - 1) / 2;
+  //size_t padding_height = (kernel_height - 1) / 2;
   for (size_t d=0; d<input_channels; ++d) {
-    for (size_t h=0; h<feature_height; ++h) {
-      for (size_t w=0; w<feature_width; ++w) {
-        for (size_t y=0; y<kernel_height; ++y) {
-          for (size_t x=0; x<kernel_width; ++x) {
+    for (size_t y=0; y<kernel_height; ++y) {
+      for (size_t x=0; x<kernel_width; ++x) {
+        for (size_t h=0; h<feature_height; ++h) {
+          for (size_t w=0; w<feature_width; ++w) {
             int32_t iy = h + y;
             int32_t ix = w + x;
             //iy -= padding_height;
