@@ -11,6 +11,11 @@
 
 #include <Windows.h>
 
+enum padding_type {
+  padding_valid,
+  padding_same,
+};
+
 // NCHW layout
 // "SAME" zero padding 
 // stride : 1 only
@@ -20,6 +25,10 @@ void convolution_naive_f32(
   size_t input_height,
   size_t kernel_width,
   size_t kernel_height,
+  size_t stride_width,
+  size_t stride_height,
+  size_t stride_channel,
+  padding_type pad,
   size_t input_channels,
   size_t output_channels,
   size_t input_line_stride,
@@ -32,28 +41,33 @@ void convolution_naive_f32(
   float* output
   )
 {
+  size_t output_width;
+  size_t output_height;
+  switch (pad) {
+  case padding_valid:
+    output_width = input_width - kernel_width + 1;
+    output_height = input_height - kernel_height + 1;
+    break;
+  case padding_same:
+    output_width = input_width;
+    output_height = input_height;
+    break;
+  }
+  if (stride_height == 0 || stride_width == 0 || stride_channel == 0)
+    return;
+
   size_t padding_width = (kernel_width - 1) / 2;
   size_t padding_height = (kernel_width - 1) / 2;
-  for (size_t h=0; h<input_height; ++h) {
-    for (size_t w=0; w<input_width; ++w) {
+  for (size_t h=0; h<output_height; h+=stride_height) {
+    for (size_t w=0; w<output_width; w+=stride_width) {
       for (size_t m=0; m<output_channels; ++m) {
         float sum = bias[m];
-        for (size_t d=0; d<input_channels; ++d) {
+        for (size_t d=0; d<input_channels; d+=stride_channel) {
           for (size_t y=0; y<kernel_height; ++y) {
             for (size_t x=0; x<kernel_width; ++x) {
               // output[m][h][w] += input[d][h+y][w+x] * weight[m][d][y][x];
-#if 0
-              int32_t iy = (int32_t)(h + y) - padding_height;
-              int32_t ix = (int32_t)(w + x) - padding_width;
-              if (iy < 0 || 0 < ix
-                || iy >= input_height || ix >= input_width)
-              {
-                continue;
-              }
-#else
               int32_t iy = (int32_t)(h + y);
               int32_t ix = (int32_t)(w + x);
-#endif
               size_t input_index = d * input_image_stride
                                    + input_line_stride * iy + ix;
               size_t weight_index = m * input_channels * kernel_height * kernel_width
@@ -218,6 +232,10 @@ int main(int argc, char* argv[])
     input_height,
     kernel_width,
     kernel_height,
+    1, // stride_width
+    1, // stride_height
+    1, // stride_channel
+    padding_same,
     input_channels,
     output_channels,
     padded_input_width,
