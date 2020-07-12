@@ -1,0 +1,17 @@
+
+Convolution in Caffe: a memo
+https://github.com/Yangqing/caffe/wiki/Convolution-in-Caffe:-a-memo
+
+なぜcuDNNのConvolutionは高速なのか
+https://tkng.org/b/2016/03/06/convolution/
+
+いまどきのmatmul
+http://nano.flop.jp/txt/matmul/index.html
+
+Convolution処理の手法　Im2Col方式の図解
+https://qiita.com/t-tkd3a/items/6b17f296d61d14e12953
+
+Convolution arithmetic
+https://github.com/vdumoulin/conv_arithmetic
+
+
