@@ -21,8 +21,10 @@ void NCHW_convolution_naive_f32(
   size_t kernel_height,
   size_t input_channels,
   size_t output_channels,
-  //size_t input_line_stride,
-  //size_t input_image_stride,
+  size_t input_line_stride,
+  size_t input_image_stride,
+  size_t output_line_stride,
+  size_t output_image_stride,
   const float* input,
   const float* weight,
   const float* bias,
@@ -39,6 +41,7 @@ void NCHW_convolution_naive_f32(
           for (size_t y=0; y<kernel_height; ++y) {
             for (size_t x=0; x<kernel_width; ++x) {
               // output[m][h][w] += input[d][h+y][w+x] * weight[m][d][y][x];
+#if 0
               int32_t iy = (int32_t)(h + y) - padding_height;
               int32_t ix = (int32_t)(w + x) - padding_width;
               if (iy < 0 || 0 < ix
@@ -46,8 +49,12 @@ void NCHW_convolution_naive_f32(
               {
                 continue;
               }
-              size_t input_index = d * feature_height * feature_width
-                                   + feature_width * iy + ix;
+#else
+              int32_t iy = (int32_t)(h + y);
+              int32_t ix = (int32_t)(w + x);
+#endif
+              size_t input_index = d * input_image_stride
+                                   + input_line_stride * iy + ix;
               size_t weight_index = m * input_channels * kernel_height * kernel_width
                                     + d * kernel_height * kernel_width
                                     + kernel_width * y + x;
@@ -55,8 +62,8 @@ void NCHW_convolution_naive_f32(
             }
           }
         }
-        size_t output_index = m * feature_height * feature_width
-                              + feature_width * h + w;
+        size_t output_index = m * output_image_stride
+                              + output_line_stride * h + w;
         output[output_index] = sum;
       }
     }
@@ -112,6 +119,10 @@ void NCHW_im2col(
   size_t kernel_width,
   size_t kernel_height,
   size_t input_channels,
+  size_t input_line_stride,
+  size_t input_image_stride,
+  size_t col_line_stride,
+  size_t col_image_stride,
   const float* im,
   float* col
   )
@@ -125,17 +136,17 @@ void NCHW_im2col(
           for (size_t x=0; x<kernel_width; ++x) {
             int32_t iy = h + y;
             int32_t ix = w + x;
-            iy -= padding_height;
-            ix -= padding_width;
-            if (iy < 0 || 0 < ix
-              || iy >= feature_height || ix >= feature_width)
-            {
-              continue;
-            }
-            size_t im_index = d * feature_height * feature_width
-                              + iy * feature_width + ix;
-            size_t col_index = (d * kernel_height * kernel_width + y * kernel_width + x) * (feature_height * feature_width)
-                               + feature_width * h + w;
+            //iy -= padding_height;
+            //ix -= padding_width;
+            //if (iy < 0 || 0 < ix
+            //  || iy >= feature_height || ix >= feature_width)
+            //{
+            //  continue;
+            //}
+            size_t im_index = d * input_image_stride
+                              + iy * input_line_stride + ix;
+            size_t col_index = (d * kernel_height * kernel_width + y * kernel_width + x) * col_image_stride
+                               + col_line_stride * h + w;
             col[col_index] = im[im_index];
           }
         }
@@ -260,11 +271,11 @@ inline void measure_stop(const char* name)
 int main(int argc, char* argv[])
 {
   size_t feature_width = 128;
-  size_t feature_height = 64;
+  size_t feature_height = 128;
   size_t kernel_width = 3;
   size_t kernel_height = 3;
   size_t input_channels = 64;
-  size_t output_channels = 128;
+  size_t output_channels = 256;
 
   num_ops = feature_height * feature_width * output_channels * input_channels * kernel_height * kernel_width * 2;
   printf("feature_width : %zu\n", feature_width);
@@ -277,11 +288,11 @@ int main(int argc, char* argv[])
 
   size_t padded_feature_width = feature_width + kernel_width - 1;
   size_t padded_feature_height = feature_height + kernel_height - 1;
-  size_t input_bytes = feature_height * feature_width * input_channels * sizeof(float);
-  size_t col_bytes = (kernel_height * kernel_width * input_channels) * (feature_height * feature_width) * sizeof(float);
+  size_t input_bytes = padded_feature_height * padded_feature_width * input_channels * sizeof(float);
+  size_t col_bytes = (kernel_height * kernel_width * input_channels) * (padded_feature_height * padded_feature_width) * sizeof(float);
   size_t weight_bytes = output_channels * (kernel_height * kernel_width * input_channels) * sizeof(float);
   size_t bias_bytes = output_channels * sizeof(float);
-  size_t output_bytes = feature_height * feature_width * output_channels * sizeof(float);
+  size_t output_bytes = padded_feature_height * padded_feature_width * output_channels * sizeof(float);
   float* input = (float*)malloc(input_bytes);
   float* col = (float*)malloc(col_bytes);
   float* weight = (float*)malloc(weight_bytes);
@@ -300,8 +311,14 @@ int main(int argc, char* argv[])
   std::mt19937 mt(rd());
   std::uniform_real_distribution<float> dist(0.0f, 10.0f);
   mt.seed();
-  for (size_t i=0; i<feature_height * feature_width * input_channels; ++i) {
-    input[i] = dist(mt);
+  for (size_t i=0; i<input_channels; ++i) {
+    for (size_t j=0; j<feature_height; ++j) {
+      for (size_t k=0; k<feature_width; ++k) {
+        size_t input_index = i * padded_feature_height * padded_feature_width
+                             + (j + 1) * padded_feature_width + (k + 1);
+        input[input_index] = dist(mt);
+      }
+    }
   }
   for (size_t i=0; i<output_channels * (kernel_height * kernel_width * input_channels); ++i) {
     weight[i] = dist(mt);
@@ -317,10 +334,14 @@ int main(int argc, char* argv[])
     kernel_height,
     input_channels,
     output_channels,
+    padded_feature_width,
+    padded_feature_height * padded_feature_width,
+    padded_feature_width,
+    padded_feature_height * padded_feature_width,
     input,
     weight,
     bias,
-    output0
+    output0 + padded_feature_width + 1
   );
   measure_stop("NCHW_convolution_naive_f32");
 
@@ -347,8 +368,12 @@ int main(int argc, char* argv[])
     kernel_width,
     kernel_height,
     input_channels,
+    padded_feature_width,
+    padded_feature_height * padded_feature_width,
+    padded_feature_width,
+    padded_feature_height * padded_feature_width,
     input,
-    col
+    col + padded_feature_width + 1
   );
   measure_stop("NCHW_im2col");
 
@@ -366,9 +391,9 @@ int main(int argc, char* argv[])
 
   should_print_flops = true;
 
-  size_t acols = (kernel_width * kernel_height * input_channels);
+  size_t acols = (input_channels * kernel_height * kernel_width);
   size_t arows = output_channels;
-  size_t bcols = (feature_width * feature_height);
+  size_t bcols = (padded_feature_height * padded_feature_width);
 
   size_t m = arows;
   size_t n = bcols;
